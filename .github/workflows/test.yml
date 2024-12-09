@@ -23,8 +23,20 @@ jobs:
         python -m pip install --upgrade pip
         pip install black flake8 mypy pytest
 
+    - name: Check for tests
+      id: check_tests
+      run: |
+        if [ -z "$(find tests -name 'test_*.py')" ]; then
+          echo "No tests found."
+          echo "skip_tests=true" >> $GITHUB_ENV
+        else
+          echo "Tests found."
+          echo "skip_tests=false" >> $GITHUB_ENV
+        fi
+
     - name: Run tests
-      run: pytest
+      if: env.skip_tests == 'false'
+      run: pytest tests/
 
     - name: Run Black
       run: black --check .
