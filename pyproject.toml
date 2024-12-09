@@ -1,1 +1,8 @@
-# pyproject.toml configuration
+[project]
+name = "optunafs"
+version = "0.1.0"
+description = "Feature Selection via Optuna"
+readme = "README.md"
+dependencies = [
+    "optuna>=4.1.0",
+]
