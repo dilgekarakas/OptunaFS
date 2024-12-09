@@ -21,7 +21,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install black flake8 mypy pytest
+        pip install scikit-learn black flake8 mypy pytest
 
     - name: Check for tests
       id: check_tests
