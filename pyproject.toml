@@ -1,8 +1,27 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "optunafs"
+name = "OptunaFS"
 version = "0.1.0"
-description = "Feature Selection via Optuna"
-readme = "README.md"
 dependencies = [
-    "optuna>=4.1.0",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "optuna",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+ignore_missing_imports = true
