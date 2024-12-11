@@ -1,1 +1,1 @@
-from .selector import FeatureSelector
+from .selector import FeatureSelector, FeatureSelectionResult
