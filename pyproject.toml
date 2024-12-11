@@ -13,10 +13,12 @@ dependencies = [
     "scikit-learn",
     "optuna",
 ]
-dynamic = ["readme"]
 
 [tool.setuptools]
 packages = ["OptunaFS"]
+
+[tool.setuptools.package-data]
+"*" = ["*.txt", "*.rst"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
