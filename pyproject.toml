@@ -5,12 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "OptunaFS"
 version = "0.1.0"
+description = "Feature selection with Optuna"
+requires-python = ">=3.8"
 dependencies = [
     "numpy",
     "pandas",
     "scikit-learn",
     "optuna",
 ]
+dynamic = ["readme"]
+
+[tool.setuptools]
+packages = ["OptunaFS"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
