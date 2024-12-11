@@ -29,9 +29,10 @@ jobs:
         run: |
           uv venv
           source .venv/bin/activate
-          uv pip install build wheel
+          uv pip install --upgrade pip
+          uv pip install build wheel setuptools
           uv pip install numpy pandas scikit-learn optuna pytest black flake8 mypy
-          uv pip install -e .
+          python -m pip install -e .
 
       - name: Check for tests
         id: check_tests
