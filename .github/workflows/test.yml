@@ -1,4 +1,5 @@
 name: Python Package CI
+
 on:
   push:
     branches:
@@ -6,49 +7,49 @@ on:
   pull_request:
     branches:
       - main
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
 
-    - name: Install uv
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-    - name: Install dependencies
-      run: |
-        uv pip sync uv.lock
-        uv pip install -e .
-        uv pip install pytest black flake8 mypy
+      - name: Install dependencies
+        run: |
+          uv pip install numpy pandas scikit-learn optuna pytest black flake8 mypy
+          uv pip install -e .
 
-    - name: Check for tests
-      id: check_tests
-      run: |
-        if [ -z "$(find tests -name 'test_*.py')" ]; then
-          echo "No tests found."
-          echo "skip_tests=true" >> $GITHUB_ENV
-        else
-          echo "Tests found."
-          echo "skip_tests=false" >> $GITHUB_ENV
-        fi
+      - name: Check for tests
+        id: check_tests
+        run: |
+          if [ -z "$(find tests -name 'test_*.py')" ]; then
+            echo "No tests found."
+            echo "skip_tests=true" >> $GITHUB_ENV
+          else
+            echo "Tests found."
+            echo "skip_tests=false" >> $GITHUB_ENV
+          fi
 
-    - name: Run tests
-      if: env.skip_tests == 'false'
-      run: pytest tests/
+      - name: Run tests
+        if: env.skip_tests == 'false'
+        run: pytest tests/
 
-    - name: Run Black
-      run: black --check .
+      - name: Run Black
+        run: black --check .
 
-    - name: Run Flake8
-      run: flake8 .
+      - name: Run Flake8
+        run: flake8 .
 
-    - name: Type Checking with MyPy
-      run: mypy .
+      - name: Type Checking with MyPy
+        run: mypy .
