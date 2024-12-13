@@ -2,22 +2,57 @@ import optuna
 from sklearn.model_selection import cross_val_score
 import numpy as np
 import pandas as pd
-from typing import Union, List, Dict, Optional
-from dataclasses import dataclass
+from typing import Union, List, Dict, Optional, Tuple, Any
+from dataclasses import dataclass, field
 from sklearn.base import BaseEstimator
 import logging
+from abc import ABC, abstractmethod
+import joblib
+from pathlib import Path
+import warnings
+from datetime import datetime
 
 
 @dataclass
 class FeatureSelectionResult:
+    """
+    Data class to store feature selection results.
+    """
+
     selected_features: List[str]
     zero_out_features: List[str]
     best_score: float
-    best_trial_params: Dict
+    best_trial_params: Dict[str, Any]
     study: optuna.study.Study
+    execution_time: float = field(default=0.0)
+    feature_importance: Optional[pd.DataFrame] = None
+    cv_scores: Optional[List[float]] = None
+
+    def save(self, path: Union[str, Path]) -> None:
+        """Save results to disk"""
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "FeatureSelectionResult":
+        """Load results from disk"""
+        return joblib.load(path)
 
 
-class FeatureSelector:
+class BaseFeatureSelector(ABC):
+    """Abstract base class for feature selection"""
+
+    @abstractmethod
+    def optimize(self) -> FeatureSelectionResult:
+        pass
+
+    @abstractmethod
+    def transform(
+        self, X: Union[np.ndarray, pd.DataFrame]
+    ) -> Union[np.ndarray, pd.DataFrame]:
+        pass
+
+
+class FeatureSelector(BaseFeatureSelector):
     """
     Feature selector using Optuna for optimization.
     Implements feature selection by trying different combinations of zeroing out features
@@ -32,6 +67,10 @@ class FeatureSelector:
         scoring: str,
         cv: int = 4,
         random_state: Optional[int] = None,
+        n_jobs: int = -1,
+        optimization_direction: str = "maximize",
+        early_stopping_rounds: Optional[int] = None,
+        feature_groups: Optional[Dict[str, List[str]]] = None,
     ):
         """
         Initialize the FeatureSelector.
@@ -43,6 +82,10 @@ class FeatureSelector:
             scoring: Scoring metric for cross validation
             cv: Number of cross-validation folds
             random_state: Random state for reproducibility
+            n_jobs: Number of parallel jobs
+            optimization_direction: Direction of optimization ("maximize" or "minimize")
+            early_stopping_rounds: Number of rounds for early stopping
+            feature_groups: Dictionary of feature groups for group-wise selection
         """
         self.model = model
         self.X = X
@@ -50,9 +93,12 @@ class FeatureSelector:
         self.scoring = scoring
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
+        self.optimization_direction = optimization_direction
+        self.early_stopping_rounds = early_stopping_rounds
+        self.feature_groups = feature_groups
         self.logger = self._setup_logger()
 
-        # Set feature names
         self.feature_names = (
             X.columns.tolist()
             if isinstance(X, pd.DataFrame)
@@ -60,73 +106,116 @@ class FeatureSelector:
         )
 
         self._validate_inputs()
+        self._setup_study()
+
+    def _setup_study(self) -> None:
+        """Initialize Optuna study"""
+        self.study = optuna.create_study(
+            direction="maximize"
+            if self.optimization_direction == "maximize"
+            else "minimize",
+            sampler=optuna.samplers.TPESampler(seed=self.random_state),
+            pruner=optuna.pruners.MedianPruner()
+            if self.early_stopping_rounds
+            else None,
+        )
 
     def _setup_logger(self) -> logging.Logger:
-        """Set up logging configuration"""
-        logger = logging.getLogger(__name__)
+        """Set up logging configuration with more detailed formatting"""
+        logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         if not logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
             )
             handler.setFormatter(formatter)
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
         return logger
 
-    def _validate_inputs(self):
-        """Validate input parameters"""
+    def _validate_inputs(self) -> None:
+        """Validate input parameters with detailed error messages"""
         if not isinstance(self.cv, int) or self.cv < 2:
             raise ValueError("cv must be an integer greater than 1")
 
         if len(self.y) != len(self.X):
-            raise ValueError("X and y must have the same number of samples")
+            raise ValueError(
+                f"X and y must have the same number of samples. Got X: {len(self.X)}, y: {len(self.y)}"
+            )
 
         if isinstance(self.X, pd.DataFrame):
             if self.X.isna().any().any():
-                raise ValueError("Input X contains missing values")
+                cols_with_na = self.X.columns[self.X.isna().any()].tolist()
+                raise ValueError(
+                    f"Input X contains missing values in columns: {cols_with_na}"
+                )
+
+        if self.optimization_direction not in ["maximize", "minimize"]:
+            raise ValueError(
+                "optimization_direction must be either 'maximize' or 'minimize'"
+            )
 
     def _create_feature_mask(self, trial: optuna.Trial) -> List[bool]:
-        """Create a boolean mask for feature selection"""
-        return [
-            trial.suggest_categorical(f"feature_{i}", ["keep", "zero_out"]) == "keep"
-            for i, _ in enumerate(self.feature_names)
-        ]
+        """Create a boolean mask for feature selection with group support"""
+        if self.feature_groups:
+            mask = []
+            for group_name, features in self.feature_groups.items():
+                group_decision = trial.suggest_categorical(
+                    f"group_{group_name}", ["keep", "zero_out"]
+                )
+                mask.extend([group_decision == "keep"] * len(features))
+        else:
+            mask = [
+                trial.suggest_categorical(f"feature_{i}", ["keep", "zero_out"])
+                == "keep"
+                for i, _ in enumerate(self.feature_names)
+            ]
+        return mask
 
     def objective(self, trial: optuna.Trial) -> float:
-        """
-        Objective function for Optuna optimization.
+        """Enhanced objective function with better error handling and logging"""
+        start_time = datetime.now()
 
-        Args:
-            trial: Optuna trial object
-
-        Returns:
-            float: Negative mean cross-validation score (to minimize)
-        """
-        # Create feature mask
-        feature_mask = self._create_feature_mask(trial)
-
-        # Create temporary dataset with zeroed out features
-        X_tmp = self.X.copy()
-        if isinstance(X_tmp, pd.DataFrame):
-            X_tmp.iloc[:, ~np.array(feature_mask)] = 0
-        else:
-            X_tmp[:, ~np.array(feature_mask)] = 0
-
-        # Calculate cross-validation score
         try:
-            cv_scores = cross_val_score(
-                self.model, X_tmp, self.y, cv=self.cv, scoring=self.scoring
-            )
+            feature_mask = self._create_feature_mask(trial)
+
+            if not any(feature_mask):
+                return (
+                    float("-inf")
+                    if self.optimization_direction == "maximize"
+                    else float("inf")
+                )
+
+            X_tmp = self.transform(self.X, feature_mask)
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning)
+                cv_scores = cross_val_score(
+                    self.model,
+                    X_tmp,
+                    self.y,
+                    cv=self.cv,
+                    scoring=self.scoring,
+                    n_jobs=self.n_jobs,
+                )
+
             mean_score = np.mean(cv_scores)
+            std_score = np.std(cv_scores)
 
-            # Log progress
             self.logger.debug(
-                f"Trial {trial.number}: Score = {mean_score:.4f}, "
-                f"Features kept = {sum(feature_mask)}"
+                f"Trial {trial.number}: Score = {mean_score:.4f} ± {std_score:.4f}, "
+                f"Features kept = {sum(feature_mask)}/{len(feature_mask)}, "
+                f"Time = {(datetime.now() - start_time).total_seconds():.2f}s"
             )
 
-            return -mean_score  # Negative because Optuna minimizes
+            trial.set_user_attr("cv_scores", cv_scores.tolist())
+            trial.set_user_attr("std_score", std_score)
+            trial.set_user_attr("n_features", sum(feature_mask))
+
+            return (
+                mean_score if self.optimization_direction == "maximize" else -mean_score
+            )
 
         except Exception as e:
             self.logger.error(f"Error in trial {trial.number}: {str(e)}")
@@ -138,32 +227,21 @@ class FeatureSelector:
         timeout: Optional[int] = None,
         show_progress_bar: bool = True,
     ) -> FeatureSelectionResult:
-        """
-        Run the optimization process.
+        """Enhanced optimization process with more features"""
+        start_time = datetime.now()
 
-        Args:
-            n_trials: Number of trials for optimization
-            timeout: Timeout in seconds
-            show_progress_bar: Whether to show progress bar
+        self.logger.info(f"Starting optimization with {n_trials} trials...")
 
-        Returns:
-            FeatureSelectionResult object containing selection results
-        """
-        # Create study
-        self.study = optuna.create_study(
-            direction="minimize",
-            sampler=optuna.samplers.TPESampler(seed=self.random_state),
-        )
-
-        # Run optimization
         self.study.optimize(
             self.objective,
             n_trials=n_trials,
             timeout=timeout,
             show_progress_bar=show_progress_bar,
+            callbacks=[self._optimization_callback]
+            if self.early_stopping_rounds
+            else None,
         )
 
-        # Get results
         best_trial = self.study.best_trial
         selected_features = [
             name
@@ -176,92 +254,119 @@ class FeatureSelector:
             if param == "zero_out"
         ]
 
-        # Log results
-        self.logger.info(
-            f"Optimization finished. Best score: {-best_trial.value:.4f}, "
-            f"Selected {len(selected_features)} features"
-        )
+        execution_time = (datetime.now() - start_time).total_seconds()
 
-        return FeatureSelectionResult(
+        importance_df = self.get_feature_importance()
+
+        result = FeatureSelectionResult(
             selected_features=selected_features,
             zero_out_features=zero_out_features,
-            best_score=-best_trial.value,
+            best_score=best_trial.value
+            if self.optimization_direction == "maximize"
+            else -best_trial.value,
             best_trial_params=best_trial.params,
             study=self.study,
+            execution_time=execution_time,
+            feature_importance=importance_df,
+            cv_scores=best_trial.user_attrs["cv_scores"],
         )
 
+        self.logger.info(
+            f"Optimization finished:\n"
+            f"Best score: {result.best_score:.4f}\n"
+            f"Selected features: {len(selected_features)}/{len(self.feature_names)}\n"
+            f"Execution time: {execution_time:.2f}s"
+        )
+
+        return result
+
+    def _optimization_callback(
+        self, study: optuna.study.Study, trial: optuna.trial.Trial
+    ) -> None:
+        """Callback for early stopping"""
+        if (
+            self.early_stopping_rounds
+            and len(study.trials) >= self.early_stopping_rounds
+        ):
+            recent_scores = [
+                t.value for t in study.trials[-self.early_stopping_rounds :]
+            ]
+            if len(set(recent_scores)) == 1:
+                study.stop()
+
     def transform(
-        self, X: Union[np.ndarray, pd.DataFrame]
+        self,
+        X: Union[np.ndarray, pd.DataFrame],
+        feature_mask: Optional[List[bool]] = None,
     ) -> Union[np.ndarray, pd.DataFrame]:
-        """
-        Transform data by zeroing out unselected features.
-
-        Args:
-            X: Input features to transform
-
-        Returns:
-            Transformed features with unselected features zeroed out
-        """
-        if not hasattr(self, "study"):
-            raise RuntimeError("Must run optimize() before transform()")
+        """Transform data with optional feature mask"""
+        if feature_mask is None:
+            if not hasattr(self, "study"):
+                raise RuntimeError(
+                    "Must run optimize() before transform() without feature_mask"
+                )
+            feature_mask = [
+                param == "keep" for param in self.study.best_trial.params.values()
+            ]
 
         X_new = X.copy()
-        zero_out_features = self.get_zero_out_features()
-
         if isinstance(X, pd.DataFrame):
-            X_new[zero_out_features] = 0
+            mask_dict = dict(zip(self.feature_names, feature_mask))
+            for feature, keep in mask_dict.items():
+                if not keep:
+                    X_new[feature] = 0
         else:
-            indices = [
-                i
-                for i, name in enumerate(self.feature_names)
-                if name in zero_out_features
-            ]
-            X_new[:, indices] = 0
+            X_new[:, ~np.array(feature_mask)] = 0
 
         return X_new
 
-    def get_zero_out_features(self) -> List[str]:
-        """Get list of features that should be zeroed out"""
-        if not hasattr(self, "study"):
-            raise RuntimeError("Must run optimize() before getting features")
-
-        return [
-            name
-            for name, param in zip(
-                self.feature_names, self.study.best_trial.params.values()
-            )
-            if param == "zero_out"
-        ]
-
     def get_feature_importance(self) -> pd.DataFrame:
-        """
-        Calculate feature importance based on selection frequency.
-
-        Returns:
-            DataFrame with feature importance metrics
-        """
+        """Enhanced feature importance calculation with more metrics"""
         if not hasattr(self, "study"):
             raise RuntimeError("Must run optimize() before getting feature importance")
 
-        # Calculate selection frequency for each feature
-        feature_counts = {name: 0 for name in self.feature_names}
+        feature_stats = {
+            name: {"keep_count": 0, "scores": []} for name in self.feature_names
+        }
+
         for trial in self.study.trials:
             if trial.state == optuna.trial.TrialState.COMPLETE:
+                score = (
+                    trial.value
+                    if self.optimization_direction == "maximize"
+                    else -trial.value
+                )
                 for name, param in zip(self.feature_names, trial.params.values()):
                     if param == "keep":
-                        feature_counts[name] += 1
+                        feature_stats[name]["keep_count"] += 1
+                        feature_stats[name]["scores"].append(score)
 
-        # Create importance DataFrame
-        importance_df = pd.DataFrame(
-            {
-                "feature": list(feature_counts.keys()),
-                "selection_frequency": [
-                    count / len(self.study.trials) for count in feature_counts.values()
-                ],
-            }
-        )
-        importance_df = importance_df.sort_values(
+        importance_data = []
+        for name, stats in feature_stats.items():
+            importance_data.append(
+                {
+                    "feature": name,
+                    "selection_frequency": stats["keep_count"] / len(self.study.trials),
+                    "mean_score_when_selected": np.mean(stats["scores"])
+                    if stats["scores"]
+                    else 0,
+                    "std_score_when_selected": np.std(stats["scores"])
+                    if stats["scores"]
+                    else 0,
+                    "times_selected": stats["keep_count"],
+                }
+            )
+
+        importance_df = pd.DataFrame(importance_data)
+        return importance_df.sort_values(
             "selection_frequency", ascending=False
         ).reset_index(drop=True)
 
-        return importance_df
+    def save(self, path: Union[str, Path]) -> None:
+        """Save model to disk"""
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "FeatureSelector":
+        """Load model from disk"""
+        return joblib.load(path)
