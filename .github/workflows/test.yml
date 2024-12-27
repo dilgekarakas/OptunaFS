@@ -20,9 +20,6 @@ jobs:
         pip install types-setuptools types-six
         pip install 'pandas-stubs==2.2.2.240807'
         pip install types-PyYAML
-        pip install types-joblib
-        pip install types-scikit-learn
-        pip install types-matplotlib
         pip install -e .
     - name: Format
       run: black .
