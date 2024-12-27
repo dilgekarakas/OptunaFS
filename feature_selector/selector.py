@@ -1,41 +1,131 @@
-import optuna
-from sklearn.model_selection import cross_val_score
-import numpy as np
-import pandas as pd
-from typing import Union, List, Dict, Optional, Any
-from dataclasses import dataclass, field
-from sklearn.base import BaseEstimator
 import logging
 from abc import ABC, abstractmethod
-import joblib
-from pathlib import Path
-import warnings
+from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, TypeVar, Union, cast
+
+import joblib
+import numpy as np
+import optuna
+import pandas as pd
+from sklearn.base import BaseEstimator
+from sklearn.model_selection import cross_val_score
+
+T = TypeVar("T")
 
 
 @dataclass
 class FeatureSelectionResult:
-    """
-    Data class to store feature selection results.
-    """
-
-    selected_features: List[str]
-    zero_out_features: List[str]
-    best_score: float
-    best_trial_params: Dict[str, Any]
-    study: optuna.study.Study
-    execution_time: float = field(default=0.0)
+    selected_features: List[str] = field(default_factory=list)
+    zero_out_features: List[str] = field(default_factory=list)
+    best_score: float = 0.0
+    best_trial_params: Dict[str, Any] = field(default_factory=dict)
+    study: Optional[optuna.study.Study] = None
+    execution_time: float = 0.0
     feature_importance: Optional[pd.DataFrame] = None
-    cv_scores: Optional[List[float]] = None
+    cv_scores: List[float] = field(default_factory=list)
+    feature_groups: Optional[Dict[str, List[str]]] = None
+    feature_names: List[str] = field(default_factory=list)
+    optimization_direction: str = "maximize"
 
-    def save(self, path: Union[str, Path]) -> None:
-        """Save results to disk"""
-        joblib.dump(self, path)
+    def _create_feature_mask(self, trial: optuna.Trial) -> List[bool]:
+        """Create boolean mask for features"""
+        if self.feature_groups is None:
+            raise ValueError(
+                "feature_groups must be set before calling _create_feature_mask"
+            )
 
-    @classmethod
-    def load(cls, path: Union[str, Path]) -> "FeatureSelectionResult":
-        """Load results from disk"""
-        return joblib.load(path)
+        mask: List[bool] = []
+        for group_name, features in self.feature_groups.items():
+            group_decision = trial.suggest_categorical(
+                f"group_{group_name}", ["keep", "zero_out"]
+            )
+            mask.extend([group_decision == "keep"] * len(features))
+        return mask
+
+    def transform(
+        self,
+        X: Union[np.ndarray, pd.DataFrame],
+        feature_mask: Optional[List[bool]] = None,
+    ) -> Union[np.ndarray, pd.DataFrame]:
+        """Transform data with proper type handling"""
+        if feature_mask is None:
+            if not hasattr(self, "study") or self.study is None:
+                raise RuntimeError(
+                    "Must run optimize() before transform() without feature_mask"
+                )
+            if not hasattr(self.study, "best_trial"):
+                raise RuntimeError("No best trial found. Optimization may have failed.")
+            feature_mask = [
+                param == "keep" for param in self.study.best_trial.params.values()
+            ]
+
+        if isinstance(X, pd.DataFrame):
+            df_new = X.copy()
+            mask_dict = dict(zip(self.feature_names, feature_mask))
+            for feature, keep in mask_dict.items():
+                if not keep:
+                    df_new[feature] = 0
+            return df_new
+        else:
+            X_arr: np.ndarray = np.asarray(X)
+            arr_new: np.ndarray = X_arr.copy()
+            mask_array = np.array(feature_mask, dtype=bool)
+            arr_new[:, ~mask_array] = 0
+            return arr_new
+
+    def get_feature_importance(self) -> pd.DataFrame:
+        """Enhanced feature importance calculation with proper type handling"""
+        if self.study is None:
+            raise RuntimeError("Must run optimize() before getting feature importance")
+
+        feature_stats: Dict[str, Dict[str, Union[int, List[float]]]] = {
+            name: {"keep_count": 0, "scores": []} for name in self.feature_names
+        }
+
+        for trial in self.study.trials:
+            if (
+                trial.state == optuna.trial.TrialState.COMPLETE
+                and trial.value is not None
+            ):
+                score = float(trial.value)
+                if self.optimization_direction != "maximize":
+                    score = -score
+
+                for name, param in zip(self.feature_names, trial.params.values()):
+                    if param == "keep":
+                        stats = feature_stats[name]
+                        keep_count = cast(int, stats["keep_count"])
+                        scores = cast(List[float], stats["scores"])
+                        stats["keep_count"] = keep_count + 1
+                        scores.append(score)
+
+        importance_data = []
+        for name, stats in feature_stats.items():
+            scores_list = cast(List[float], stats["scores"])
+            scores_array = np.array(scores_list, dtype=np.float64)
+            keep_count = cast(int, stats["keep_count"])
+            n_trials = len(self.study.trials)
+
+            importance_data.append(
+                {
+                    "feature": name,
+                    "selection_frequency": keep_count / n_trials,
+                    "mean_score_when_selected": float(np.mean(scores_array))
+                    if len(scores_array)
+                    else 0.0,
+                    "std_score_when_selected": float(np.std(scores_array))
+                    if len(scores_array)
+                    else 0.0,
+                    "times_selected": keep_count,
+                }
+            )
+
+        importance_df = pd.DataFrame(importance_data)
+        return importance_df.sort_values(
+            "selection_frequency", ascending=False
+        ).reset_index(drop=True)
 
 
 class BaseFeatureSelector(ABC):
@@ -55,8 +145,8 @@ class BaseFeatureSelector(ABC):
 class FeatureSelector(BaseFeatureSelector):
     """
     Feature selector using Optuna for optimization.
-    Implements feature selection by trying different combinations of zeroing out features
-    and evaluating model performance.
+    Implements feature selection by trying different combinations of zeroing out
+    features and evaluating model performance.
     """
 
     def __init__(
@@ -188,20 +278,17 @@ class FeatureSelector(BaseFeatureSelector):
                 )
 
             X_tmp = self.transform(self.X, feature_mask)
+            cv_scores_array = cross_val_score(
+                self.model,
+                X_tmp,
+                self.y,
+                cv=self.cv,
+                scoring=self.scoring,
+                n_jobs=self.n_jobs,
+            )
 
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=UserWarning)
-                cv_scores = cross_val_score(
-                    self.model,
-                    X_tmp,
-                    self.y,
-                    cv=self.cv,
-                    scoring=self.scoring,
-                    n_jobs=self.n_jobs,
-                )
-
-            mean_score = np.mean(cv_scores)
-            std_score = np.std(cv_scores)
+            mean_score = float(np.mean(cv_scores_array))
+            std_score = float(np.std(cv_scores_array))
 
             self.logger.debug(
                 f"Trial {trial.number}: Score = {mean_score:.4f} ± {std_score:.4f}, "
@@ -209,11 +296,11 @@ class FeatureSelector(BaseFeatureSelector):
                 f"Time = {(datetime.now() - start_time).total_seconds():.2f}s"
             )
 
-            trial.set_user_attr("cv_scores", cv_scores.tolist())
+            trial.set_user_attr("cv_scores", cv_scores_array.tolist())
             trial.set_user_attr("std_score", std_score)
             trial.set_user_attr("n_features", sum(feature_mask))
 
-            return (
+            return float(
                 mean_score if self.optimization_direction == "maximize" else -mean_score
             )
 
@@ -321,46 +408,55 @@ class FeatureSelector(BaseFeatureSelector):
         return X_new
 
     def get_feature_importance(self) -> pd.DataFrame:
-        """Enhanced feature importance calculation with more metrics"""
-        if not hasattr(self, "study"):
+        """Enhanced feature importance calculation with strict type handling"""
+        if not hasattr(self, "study") or self.study is None:
             raise RuntimeError("Must run optimize() before getting feature importance")
 
-        feature_stats = {
+        feature_stats: Dict[str, Dict[str, Union[int, List[float]]]] = {
             name: {"keep_count": 0, "scores": []} for name in self.feature_names
         }
 
         for trial in self.study.trials:
-            if trial.state == optuna.trial.TrialState.COMPLETE:
-                score = (
-                    trial.value
-                    if self.optimization_direction == "maximize"
-                    else -trial.value
-                )
+            if (
+                trial.state == optuna.trial.TrialState.COMPLETE
+                and trial.value is not None
+            ):
+                score = float(trial.value)
+                if self.optimization_direction != "maximize":
+                    score = -score
+
                 for name, param in zip(self.feature_names, trial.params.values()):
                     if param == "keep":
-                        feature_stats[name]["keep_count"] += 1
-                        feature_stats[name]["scores"].append(score)
+                        stats = feature_stats[name]
+                        keep_count: int = cast(int, stats.get("keep_count", 0))
+                        scores: List[float] = cast(List[float], stats.get("scores", []))
+                        stats["keep_count"] = keep_count + 1
+                        scores.append(score)
+                        stats["scores"] = scores
 
         importance_data = []
         for name, stats in feature_stats.items():
+            keep_count = cast(int, stats["keep_count"])
+            scores = cast(List[float], stats["scores"])
+            scores_array = (
+                np.array(scores, dtype=np.float64) if scores else np.array([0.0])
+            )
+
             importance_data.append(
                 {
                     "feature": name,
-                    "selection_frequency": stats["keep_count"] / len(self.study.trials),
-                    "mean_score_when_selected": np.mean(stats["scores"])
-                    if stats["scores"]
-                    else 0,
-                    "std_score_when_selected": np.std(stats["scores"])
-                    if stats["scores"]
-                    else 0,
-                    "times_selected": stats["keep_count"],
+                    "selection_frequency": float(keep_count) / len(self.study.trials),
+                    "mean_score_when_selected": float(np.mean(scores_array)),
+                    "std_score_when_selected": float(np.std(scores_array)),
+                    "times_selected": keep_count,
                 }
             )
 
-        importance_df = pd.DataFrame(importance_data)
-        return importance_df.sort_values(
-            "selection_frequency", ascending=False
-        ).reset_index(drop=True)
+        return (
+            pd.DataFrame(importance_data)
+            .sort_values("selection_frequency", ascending=False)
+            .reset_index(drop=True)
+        )
 
     def save(self, path: Union[str, Path]) -> None:
         """Save model to disk"""
@@ -368,5 +464,8 @@ class FeatureSelector(BaseFeatureSelector):
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "FeatureSelector":
-        """Load model from disk"""
-        return joblib.load(path)
+        """Load model from disk with type checking"""
+        loaded = joblib.load(path)
+        if not isinstance(loaded, cls):
+            raise TypeError(f"Loaded object is not an instance of {cls.__name__}")
+        return cast(FeatureSelector, loaded)

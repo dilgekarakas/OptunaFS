@@ -1,3 +1,3 @@
-from .selector import FeatureSelector, FeatureSelectionResult
+from .selector import FeatureSelectionResult, FeatureSelector
 
 __all__ = ["FeatureSelector", "FeatureSelectionResult"]
