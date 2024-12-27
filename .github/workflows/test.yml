@@ -15,7 +15,7 @@ jobs:
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
-        pip install black flake8 mypy pytest
+        pip install black flake8==7.0.0 mypy pytest
         pip install -e .
     - name: Format
       run: black .
