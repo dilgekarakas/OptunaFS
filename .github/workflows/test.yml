@@ -15,7 +15,7 @@ jobs:
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
-        pip install black flake8==7.0.0 mypy pytest
+        pip install black flake8==7.0.0 mypy==1.8.0 pytest
         pip install types-setuptools types-six
         pip install 'pandas-stubs==2.2.2.240807'
         python -m pip install --upgrade pip
