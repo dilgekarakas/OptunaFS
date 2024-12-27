@@ -8,9 +8,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./OptunaFS
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python
@@ -22,25 +19,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e .
-          
+        working-directory: ./OptunaFS
       - name: Check for tests
-        id: check_tests
         run: |
           if [ -z "$(find tests -name 'test_*.py')" ]; then
             echo "skip_tests=true" >> $GITHUB_ENV
           else
             echo "skip_tests=false" >> $GITHUB_ENV
           fi
-          
+        working-directory: ./OptunaFS
       - name: Run tests
         if: env.skip_tests == 'false'
         run: pytest
-        
+        working-directory: ./OptunaFS
       - name: Run Black
         run: black --check .
-        
+        working-directory: ./OptunaFS
       - name: Run Flake8
         run: flake8 .
-        
+        working-directory: ./OptunaFS
       - name: Type Checking with MyPy
         run: mypy .
+        working-directory: ./OptunaFS
