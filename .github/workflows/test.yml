@@ -1,5 +1,4 @@
 name: Python Package CI
-
 on:
   push:
     branches:
@@ -12,32 +11,23 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
+      - uses: actions/checkout@v3
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
-      - name: Install uv
+          
+      - name: Install dependencies
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Create virtual environment and install dependencies
-        run: |
-          uv venv
-          source .venv/bin/activate
-          uv pip install --upgrade pip
-          uv pip install build wheel setuptools
-          uv pip install numpy pandas scikit-learn optuna pytest black flake8 mypy
-          python -m pip install -e .
-
+          python -m pip install --upgrade pip
+          pip install build wheel setuptools
+          pip install numpy pandas scikit-learn optuna pytest black flake8 mypy
+          pip install -e .
+          
       - name: Check for tests
         id: check_tests
         run: |
-          source .venv/bin/activate
           if [ -z "$(find tests -name 'test_*.py')" ]; then
             echo "No tests found."
             echo "skip_tests=true" >> $GITHUB_ENV
@@ -45,24 +35,16 @@ jobs:
             echo "Tests found."
             echo "skip_tests=false" >> $GITHUB_ENV
           fi
-
+          
       - name: Run tests
         if: env.skip_tests == 'false'
-        run: |
-          source .venv/bin/activate
-          pytest tests/
-
+        run: pytest tests/
+        
       - name: Run Black
-        run: |
-          source .venv/bin/activate
-          black --check .
-
+        run: black --check .
+        
       - name: Run Flake8
-        run: |
-          source .venv/bin/activate
-          flake8 .
-
+        run: flake8 .
+        
       - name: Type Checking with MyPy
-        run: |
-          source .venv/bin/activate
-          mypy .
+        run: mypy .
