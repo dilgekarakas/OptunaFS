@@ -15,7 +15,8 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["OptunaFS", "OptunaFS.feature_selector"]
+packages = ["optunafs", "optunafs.feature_selector", "optunafs.tests"]
+package-dir = {"" = "."}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
