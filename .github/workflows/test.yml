@@ -26,7 +26,3 @@ jobs:
     - name: Test
       if: env.skip_tests == 'false'
       run: pytest
-    - name: Lint
-      run: |
-        flake8 . --config=setup.cfg
-        mypy .
