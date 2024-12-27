@@ -16,6 +16,7 @@ jobs:
       run: |
         pip install -r requirements.txt
         pip install black flake8==7.0.0 mypy pytest
+        pip install types-pandas scikit-learn-stubs types-joblib
         pip install -e .
     - name: Format
       run: black .
