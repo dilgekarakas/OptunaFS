@@ -2,7 +2,7 @@ import optuna
 from sklearn.model_selection import cross_val_score
 import numpy as np
 import pandas as pd
-from typing import Union, List, Dict, Optional, Tuple, Any
+from typing import Union, List, Dict, Optional, Any
 from dataclasses import dataclass, field
 from sklearn.base import BaseEstimator
 import logging

@@ -3,8 +3,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.datasets import make_classification
-from sklearn.exceptions import NotFittedError
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import optuna
 from feature_selector import FeatureSelector, FeatureSelectionResult
 
