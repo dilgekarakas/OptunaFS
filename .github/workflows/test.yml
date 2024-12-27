@@ -4,26 +4,25 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install black flake8 mypy pytest
-          pip install -e .
-      - name: Format
-        run: black .
-      - name: Test
-        if: env.skip_tests == 'false'
-        run: pytest
-      - name: Lint
-        run: |
-          flake8 .
-          mypy .
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install black flake8 mypy pytest
+        pip install -e .
+    - name: Format
+      run: black .
+    - name: Test
+      if: env.skip_tests == 'false'
+      run: pytest
+    - name: Lint
+      run: |
+        flake8 . --config=setup.cfg
+        mypy .
