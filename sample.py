@@ -1,7 +1,7 @@
 import logging
 import time
 import warnings
-from typing import Any, Dict, Union
+from typing import Dict, Union
 
 import numpy as np
 import pandas as pd
@@ -128,7 +128,7 @@ def run_sfs_benchmark(
 def run_optuna_selector(
     X_train: pd.DataFrame,
     X_test: pd.DataFrame,
-    y_train: Union[np.ndarray[Any, Any], pd.Series[Any]],
+    y_train: Union[np.ndarray, pd.Series],
     y_test: pd.DataFrame,
     logger: logging.Logger,
 ) -> Dict:
