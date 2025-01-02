@@ -29,51 +29,63 @@ class FeatureSelectionResult:
     feature_names: List[str] = field(default_factory=list)
     optimization_direction: str = "maximize"
 
-    def _create_feature_mask(self, trial: optuna.Trial) -> List[bool]:
-        """Create boolean mask for features"""
-        if self.feature_groups is None:
-            raise ValueError(
-                "feature_groups must be set before calling _create_feature_mask"
-            )
+    def _create_feature_mask(self, trial: optuna.Trial) -> Dict[str, Any]:
+        """Create a feature mask dictionary with threshold and weights"""
+        threshold = trial.suggest_float("threshold", 0.1, 0.9)
 
-        mask: List[bool] = []
-        for group_name, features in self.feature_groups.items():
-            group_decision = trial.suggest_categorical(
-                f"group_{group_name}", ["keep", "zero_out"]
-            )
-            mask.extend([group_decision == "keep"] * len(features))
-        return mask
+        weights = {}
+        if self.feature_groups:
+            for group_name, features in self.feature_groups.items():
+                group_weight = trial.suggest_float(f"group_{group_name}", 0.0, 1.0)
+                for feature in features:
+                    weights[feature] = group_weight
+        else:
+            for feature in self.feature_names:
+                weights[feature] = trial.suggest_float(f"weight_{feature}", 0.0, 1.0)
+
+        return {"weights": weights, "threshold": threshold}
 
     def transform(
         self,
         X: Union[np.ndarray, pd.DataFrame],
-        feature_mask: Optional[List[bool]] = None,
+        feature_params: Optional[Dict[str, Any]] = None,
     ) -> Union[np.ndarray, pd.DataFrame]:
-        """Transform data with proper type handling"""
-        if feature_mask is None:
+        """Transform data using feature weights and threshold"""
+        if feature_params is None:
             if not hasattr(self, "study") or self.study is None:
                 raise RuntimeError(
-                    "Must run optimize() before transform() without feature_mask"
+                    "Must run optimize() before transform() without feature_params"
                 )
-            if not hasattr(self.study, "best_trial"):
-                raise RuntimeError("No best trial found. Optimization may have failed.")
-            feature_mask = [
-                param == "keep" for param in self.study.best_trial.params.values()
-            ]
+
+            best_trial = self.study.best_trial
+            threshold = best_trial.params["threshold"]
+            weights = {}
+
+            if self.feature_groups:
+                for group_name, features in self.feature_groups.items():
+                    group_weight = best_trial.params[f"group_{group_name}"]
+                    for feature in features:
+                        weights[feature] = group_weight
+            else:
+                for feature in self.feature_names:
+                    weights[feature] = best_trial.params[f"weight_{feature}"]
+
+            feature_params = {"weights": weights, "threshold": threshold}
+
+        X_new = X.copy()
+        weights = feature_params["weights"]
+        threshold = feature_params["threshold"]
 
         if isinstance(X, pd.DataFrame):
-            df_new = X.copy()
-            mask_dict = dict(zip(self.feature_names, feature_mask))
-            for feature, keep in mask_dict.items():
-                if not keep:
-                    df_new[feature] = 0
-            return df_new
+            for feature, weight in weights.items():
+                if weight <= threshold:
+                    X_new[feature] = 0
         else:
-            X_arr: np.ndarray = np.asarray(X)
-            arr_new: np.ndarray = X_arr.copy()
-            mask_array = np.array(feature_mask, dtype=bool)
-            arr_new[:, ~mask_array] = 0
-            return arr_new
+            weight_array = np.array([weights[f] for f in self.feature_names])
+            mask = weight_array <= threshold
+            X_new[:, mask] = 0
+
+        return X_new
 
     def get_feature_importance(self) -> pd.DataFrame:
         """Enhanced feature importance calculation with proper type handling"""
@@ -246,38 +258,38 @@ class FeatureSelector(BaseFeatureSelector):
                 "optimization_direction must be either 'maximize' or 'minimize'"
             )
 
-    def _create_feature_mask(self, trial: optuna.Trial) -> List[bool]:
-        """Create a boolean mask for feature selection with group support"""
-        if self.feature_groups:
-            mask = []
+    def _create_feature_mask(self, trial: optuna.Trial) -> Dict[str, Any]:
+        """Create a feature mask dictionary with threshold and weights"""
+        threshold = trial.suggest_float("threshold", 0.1, 0.9)
+
+        weights = {}
+        if self.feature_groups is not None:
             for group_name, features in self.feature_groups.items():
-                group_decision = trial.suggest_categorical(
-                    f"group_{group_name}", ["keep", "zero_out"]
-                )
-                mask.extend([group_decision == "keep"] * len(features))
+                group_weight = trial.suggest_float(f"group_{group_name}", 0.0, 1.0)
+                for feature in features:
+                    weights[feature] = group_weight
         else:
-            mask = [
-                trial.suggest_categorical(f"feature_{i}", ["keep", "zero_out"])
-                == "keep"
-                for i, _ in enumerate(self.feature_names)
-            ]
-        return mask
+            for feature in self.feature_names:
+                weights[feature] = trial.suggest_float(f"weight_{feature}", 0.0, 1.0)
+
+        return {"weights": weights, "threshold": threshold}
 
     def objective(self, trial: optuna.Trial) -> float:
-        """Enhanced objective function with better error handling and logging"""
-        start_time = datetime.now()
-
+        """Objective function for optimization"""
         try:
-            feature_mask = self._create_feature_mask(trial)
+            feature_params = self._create_feature_mask(trial)
+            weights = feature_params["weights"]
+            threshold = feature_params["threshold"]
 
-            if not any(feature_mask):
+            if not any(w > threshold for w in weights.values()):
                 return (
-                    float("-inf")
+                    -float("inf")
                     if self.optimization_direction == "maximize"
                     else float("inf")
                 )
 
-            X_tmp = self.transform(self.X, feature_mask)
+            X_tmp = self.transform(self.X, feature_params)
+
             cv_scores_array = cross_val_score(
                 self.model,
                 X_tmp,
@@ -290,18 +302,26 @@ class FeatureSelector(BaseFeatureSelector):
             mean_score = float(np.mean(cv_scores_array))
             std_score = float(np.std(cv_scores_array))
 
+            n_features_above_threshold = sum(w > threshold for w in weights.values())
+            sparsity_penalty = 0.01 * (
+                n_features_above_threshold / len(self.feature_names)
+            )
+
+            final_score = mean_score - sparsity_penalty
+
             self.logger.debug(
                 f"Trial {trial.number}: Score = {mean_score:.4f} ± {std_score:.4f}, "
-                f"Features kept = {sum(feature_mask)}/{len(feature_mask)}, "
-                f"Time = {(datetime.now() - start_time).total_seconds():.2f}s"
+                f"Features above threshold = {n_features_above_threshold}/{len(weights)}, "
             )
 
             trial.set_user_attr("cv_scores", cv_scores_array.tolist())
             trial.set_user_attr("std_score", std_score)
-            trial.set_user_attr("n_features", sum(feature_mask))
+            trial.set_user_attr("n_features", n_features_above_threshold)
 
             return float(
-                mean_score if self.optimization_direction == "maximize" else -mean_score
+                final_score
+                if self.optimization_direction == "maximize"
+                else -final_score
             )
 
         except Exception as e:
@@ -314,9 +334,8 @@ class FeatureSelector(BaseFeatureSelector):
         timeout: Optional[int] = None,
         show_progress_bar: bool = True,
     ) -> FeatureSelectionResult:
-        """Enhanced optimization process with more features"""
+        """Optimization with continuous feature weights"""
         start_time = datetime.now()
-
         self.logger.info(f"Starting optimization with {n_trials} trials...")
 
         self.study.optimize(
@@ -330,20 +349,30 @@ class FeatureSelector(BaseFeatureSelector):
         )
 
         best_trial = self.study.best_trial
+        threshold = best_trial.params["threshold"]
+
+        # Get feature weights from best trial
+        weights = {}
+        for feature in self.feature_names:
+            param_name = f"weight_{feature}"
+            if param_name in best_trial.params:
+                weights[feature] = best_trial.params[param_name]
+            elif self.feature_groups:
+                for group_name, features in self.feature_groups.items():
+                    if feature in features:
+                        weights[feature] = best_trial.params[f"group_{group_name}"]
+                        break
+
+        # Determine selected and zeroed features based on threshold
         selected_features = [
-            name
-            for name, param in zip(self.feature_names, best_trial.params.values())
-            if param == "keep"
+            feature for feature, weight in weights.items() if weight > threshold
         ]
+
         zero_out_features = [
-            name
-            for name, param in zip(self.feature_names, best_trial.params.values())
-            if param == "zero_out"
+            feature for feature, weight in weights.items() if weight <= threshold
         ]
 
         execution_time = (datetime.now() - start_time).total_seconds()
-
-        importance_df = self.get_feature_importance()
 
         result = FeatureSelectionResult(
             selected_features=selected_features,
@@ -354,7 +383,6 @@ class FeatureSelector(BaseFeatureSelector):
             best_trial_params=best_trial.params,
             study=self.study,
             execution_time=execution_time,
-            feature_importance=importance_df,
             cv_scores=best_trial.user_attrs["cv_scores"],
         )
 
@@ -384,26 +412,42 @@ class FeatureSelector(BaseFeatureSelector):
     def transform(
         self,
         X: Union[np.ndarray, pd.DataFrame],
-        feature_mask: Optional[List[bool]] = None,
+        feature_params: Optional[Dict[str, Any]] = None,
     ) -> Union[np.ndarray, pd.DataFrame]:
-        """Transform data with optional feature mask"""
-        if feature_mask is None:
-            if not hasattr(self, "study"):
+        """Transform data using feature weights and threshold"""
+        if feature_params is None:
+            if not hasattr(self, "study") or self.study is None:
                 raise RuntimeError(
-                    "Must run optimize() before transform() without feature_mask"
+                    "Must run optimize() before transform() without feature_params"
                 )
-            feature_mask = [
-                param == "keep" for param in self.study.best_trial.params.values()
-            ]
+
+            best_trial = self.study.best_trial
+            threshold = best_trial.params["threshold"]
+            weights = {}
+
+            if self.feature_groups is not None:
+                for group_name, features in self.feature_groups.items():
+                    group_weight = best_trial.params[f"group_{group_name}"]
+                    for feature in features:
+                        weights[feature] = group_weight
+            else:
+                for feature in self.feature_names:
+                    weights[feature] = best_trial.params[f"weight_{feature}"]
+
+            feature_params = {"weights": weights, "threshold": threshold}
 
         X_new = X.copy()
+        weights = feature_params["weights"]
+        threshold = feature_params["threshold"]
+
         if isinstance(X, pd.DataFrame):
-            mask_dict = dict(zip(self.feature_names, feature_mask))
-            for feature, keep in mask_dict.items():
-                if not keep:
+            for feature, weight in weights.items():
+                if weight <= threshold:
                     X_new[feature] = 0
         else:
-            X_new[:, ~np.array(feature_mask)] = 0
+            weight_array = np.array([weights[f] for f in self.feature_names])
+            mask = weight_array <= threshold
+            X_new[:, mask] = 0
 
         return X_new
 
