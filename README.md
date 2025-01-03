@@ -1,5 +1,9 @@
 # OptunaFS
 
+<p align="center">
+  <img src="assets/images/logo.svg" width="200" alt="OptunaFS Logo">
+</p>
+
 OptunaFS is a Python library that enhances feature selection in machine learning workflows by leveraging Optuna's optimization framework. It provides an intelligent way to identify and select the most impactful features for your models.
 
 ## Key Features
