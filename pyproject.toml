@@ -1,14 +1,14 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "optunafs"
-version = "0.1.0"
+version = "0.1.0-post1"
 description = "Feature selection with Optuna optimization"
 readme = "README.md"
 requires-python = ">=3.8"
-license = "MIT"
+license = {text = "MIT"}
 authors = [
     { name = "Dilge Karakas", email = "karakasdilge@gmail.com" }
 ]
@@ -43,3 +43,7 @@ dev = [
 Homepage = "https://github.com/dilgekarakas/optunafs"
 Documentation = "https://github.com/dilgekarakas/optunafs#readme"
 Repository = "https://github.com/dilgekarakas/optunafs.git"
+
+[tool.setuptools]
+packages = ["optunafs"]
+package-dir = {"optunafs" = "feature_selector"}

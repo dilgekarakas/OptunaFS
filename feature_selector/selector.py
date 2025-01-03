@@ -12,6 +12,9 @@ import pandas as pd
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import cross_val_score
 
+logging.getLogger("optuna").setLevel(logging.WARNING)
+logging.basicConfig(level=logging.WARNING)
+
 T = TypeVar("T")
 
 
