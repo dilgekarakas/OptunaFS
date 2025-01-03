@@ -95,28 +95,6 @@ selector = FeatureSelector(
 )
 ```
 
-### Feature Importance Analysis
-
-Get detailed insights into feature selection patterns:
-
-```python
-importance_df = selector.get_feature_importance()
-print(importance_df.sort_values('selection_frequency', ascending=False))
-```
-
-## Development
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/optunafs.git
-
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest tests/
-```
-
 ## License
 
 This project is licensed under the terms of the MIT license.
