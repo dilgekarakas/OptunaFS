@@ -1,100 +1,119 @@
-# OptunaFS: Efficient Feature Selection with Optuna
+# OptunaFS
 
-OptunaFS is a Python library that combines the power of Optuna's hyperparameter optimization with feature selection, enabling automatic discovery of the most impactful features for your machine learning models.
+OptunaFS is a Python library that enhances feature selection in machine learning workflows by leveraging Optuna's optimization framework. It provides an intelligent way to identify and select the most impactful features for your models.
 
-## 🌟 Features
+## Key Features
 
-- **Automated Feature Selection**: Leverages Optuna's optimization capabilities to identify the most relevant features
-- **Model Agnostic**: Works with any scikit-learn compatible model
-- **Easy Integration**: Seamlessly fits into existing machine learning pipelines
-- **Cross-Validation Support**: Built-in cross-validation for robust feature selection
-- **Flexible Scoring**: Supports various scikit-learn scoring metrics
+- Automated feature selection through Optuna's hyperparameter optimization
+- Supports any scikit-learn compatible estimator
+- Built-in cross-validation for robust feature evaluation
+- Support for feature grouping and early stopping
+- Detailed feature importance analysis
+- Type-safe implementation with comprehensive error handling
 
-## 🚀 Installation
+## Installation
 
 ```bash
 pip install optunafs
 ```
 
-## 📊 Quick Start
+## Usage Example
 
 ```python
 from optunafs import FeatureSelector
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.datasets import make_classification
-from sklearn.linear_model import LogisticRegression
 
-# Create sample dataset
-X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
+# Create example dataset
+X, y = make_classification(
+    n_samples=1000, 
+    n_features=25,
+    n_informative=10,
+    random_state=42
+)
 
 # Initialize model
-model = LogisticRegression()
+model = RandomForestClassifier(random_state=42)
 
 # Create feature selector
 selector = FeatureSelector(
     model=model,
     X=X,
     y=y,
-    scoring='accuracy',
-    cv=5
+    scoring='roc_auc',
+    cv=4,
+    optimization_direction='maximize'
 )
 
 # Run optimization
-selector.optimize(n_trials=100)
+result = selector.optimize(n_trials=100)
 
 # Get selected features
-selected_features = selector.get_best_zero_out_features()
-print(f"Selected features: {selected_features}")
-```
-
-## 🔍 How It Works
-
-OptunaFS uses Optuna's optimization framework to systematically explore different feature combinations. For each trial:
-
-1. Features are randomly selected to be either kept or "zeroed out"
-2. The model is evaluated using cross-validation with the selected features
-3. Optuna's optimization algorithm learns which features contribute most to model performance
-4. The process continues until the best feature combination is found
-
-## 🛠️ Advanced Usage
-
-```python
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-
-# With pandas DataFrames
-X = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(20)])
-
-# Using a different model and metric
-selector = FeatureSelector(
-    model=RandomForestClassifier(),
-    X=X,
-    y=y,
-    scoring='roc_auc',
-    cv=10
-)
-
-# More optimization trials
-selector.optimize(n_trials=200)
+print(f"Selected features: {result.selected_features}")
+print(f"Best score: {result.best_score:.4f}")
 
 # Transform data using selected features
 X_transformed = selector.transform(X)
 ```
 
-## 📈 Performance Impact
+## Advanced Features
 
-Feature selection can significantly improve model performance by:
-- Reducing overfitting
-- Decreasing model complexity
-- Improving training speed
-- Enhancing model interpretability
+### Feature Groups
 
-## 🤝 Contributing
+You can define groups of features that should be selected together:
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+```python
+feature_groups = {
+    'group1': ['feature1', 'feature2', 'feature3'],
+    'group2': ['feature4', 'feature5']
+}
+
+selector = FeatureSelector(
+    model=model,
+    X=X,
+    y=y,
+    scoring='accuracy',
+    feature_groups=feature_groups
+)
+```
+
+### Early Stopping
+
+Enable early stopping to automatically halt optimization when no improvement is seen:
+
+```python
+selector = FeatureSelector(
+    model=model,
+    X=X,
+    y=y,
+    scoring='accuracy',
+    early_stopping_rounds=10
+)
+```
+
+### Feature Importance Analysis
+
+Get detailed insights into feature selection patterns:
+
+```python
+importance_df = selector.get_feature_importance()
+print(importance_df.sort_values('selection_frequency', ascending=False))
+```
+
+## Requirements
+
+- Python >= 3.8
+- scikit-learn
+- optuna
+- numpy
+- pandas
+- lightgbm
+
+## Development
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/OptunaFS.git
+git clone https://github.com/yourusername/optunafs.git
 
 # Install development dependencies
 pip install -e ".[dev]"
@@ -102,3 +121,7 @@ pip install -e ".[dev]"
 # Run tests
 pytest tests/
 ```
+
+## License
+
+This project is licensed under the terms of the MIT license.
