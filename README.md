@@ -56,7 +56,7 @@ print(f"Best score: {result.best_score:.4f}")
 X_transformed = selector.transform(X)
 ```
 
-## Advanced Features
+## Useful Features
 
 ### Feature Groups
 
@@ -99,15 +99,6 @@ Get detailed insights into feature selection patterns:
 importance_df = selector.get_feature_importance()
 print(importance_df.sort_values('selection_frequency', ascending=False))
 ```
-
-## Requirements
-
-- Python >= 3.8
-- scikit-learn
-- optuna
-- numpy
-- pandas
-- lightgbm
 
 ## Development
 
